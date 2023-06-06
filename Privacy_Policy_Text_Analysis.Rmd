@@ -1,0 +1,974 @@
+---
+title: "Ryo_Tanaka_assignment8_final_project"
+output: html_document
+date: "2023-04-02"
+---
+
+Setting up
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+loading necessary libraries and packages 
+
+```{r}
+#install.packages("textdata")
+#install.packages("SentimentAnalysis")
+#install.packages("devtools")
+library(SentimentAnalysis)
+library(janeaustenr)
+library(tm)
+library(tidytext)
+library(textdata)
+library(quanteda)
+library(tidyverse)
+library(RColorBrewer)
+```
+
+loading a file; privacy_policy.csv
+
+```{r}
+policy <- read_csv("privacy_policy.csv")
+```
+Tokenization and cleaning
+
+```{r}
+policy_words <- policy %>% 
+  unnest_tokens(word,TEXT) %>% 
+  count(TICKER,word,sort = TRUE)
+```
+
+Filtering words that are not stop_words
+
+```{r}
+policy_words <- policy_words %>% 
+  filter(!(word %in% stop_words$word))
+policy_words
+```
+
+Making my own stop words to remove less meaningful words here
+
+```{r}
+my_stop_words <- c("amazon","apple","gm","google","johnson","morgan","j.p","chase",
+                   "lilly","mastercard’s","meta","microsoft","nvidia","u.s","tesla",
+                   "careers.unitedhealthgroup.com","visa","exxonmobil","exxon","mobil",
+                   "walmart","pi")
+policy_words_TEST <- policy_words %>% 
+  filter(!(word %in% my_stop_words))
+policy_words_TEST
+```
+
+top 10 words across the documents, removing the ticker: simple TF
+
+```{r}
+top10_policy_word <- policy_words %>% 
+  select(-TICKER) %>% 
+  group_by(word) %>% 
+  summarize(n = sum(n)) %>% 
+  arrange(desc(n)) %>% 
+  head(10)
+top10_policy_word
+```
+reordering word variable based on TF
+
+```{r}
+top10_policy_word$word <- forcats::fct_reorder(top10_policy_word$word,top10_policy_word$n,.desc = FALSE)
+```
+
+Making it object so that I can downlaod as an image
+simple TF image
+
+```{r}
+tf_image1 <- ggplot(data = top10_policy_word, 
+       aes(x = n,  # Switch x and y axes
+           y = word)) +
+  geom_bar(stat = "identity",
+           aes(fill = word)) +
+  labs(x = "Term Frequency",  # Switch x and y axis labels
+       y = "Words") +
+  ggtitle("Distribution of Term Frequency in Privacy Policy") +
+  scale_y_reordered() +  # Use scale_y_reordered instead of scale_x_reordered
+  guides(fill = F) +
+  theme_bw(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"),
+        axis.text.y = element_text(angle = 0,  # Rotate y axis labels instead of x
+                                   hjust = 1),
+        axis.title.y = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0)))  # Adjust spacing of y axis title
+tf_image1
+ggsave("tf_image1.png")
+```
+
+total number of words from each company(TICKER)
+
+```{r}
+total_policy_words <- policy_words %>% 
+  group_by(TICKER) %>% 
+  summarise(total = sum(n))
+total_policy_words
+```
+Combining total and TF using left_join here
+
+```{r}
+policy_words <- left_join(policy_words,
+                          total_policy_words)
+policy_words
+```
+Decided not to use in the paper but exploratory approach;
+Distribution of the proportional value of each term used in privacy policy. 
+* Zipf’s law states that the frequency that a word appears is inversely proportional to its rank.
+A classic version of this relationship is called Zipf’s law, after George Zipf, a 20th century American linguist.
+
+```{r}
+ggplot(data = policy_words,
+       mapping = aes(n / total,
+                     fill = TICKER)) +
+  geom_histogram(show.legend = FALSE) +
+  facet_wrap(~TICKER,
+             ncol = 4,
+             scales = "free_y")
+#ggsave("policy_tf_hist.png")
+policy_tf_hist
+```
+Learning content for future use
+Analysis of Zipf law
+ranki column: the rank of each word within the frequency table
+
+```{r}
+freq_by_rank_policy <- policy_words %>% 
+  group_by(TICKER) %>% 
+  mutate(rank = row_number(),
+         `Term Frequency` = n/total) %>% 
+  ungroup()
+freq_by_rank_policy
+```
+
+Learning content for future use: decided not to use for the paper
+
+```{r}
+freq_by_rank_policy %>% 
+  ggplot(mapping = aes(x = rank,
+                       y = `Term Frequency`,
+                       color = TICKER)) +
+  geom_line(linewidth = 1.1,
+            alpha = 0.8,
+            show.legend = FALSE) +
+  scale_x_log10() +
+  scale_y_log10() +
+  theme_bw()
+```
+
+Learning content for future use: decided not to use for the paper
+
+
+```{r}
+rank_subset <- freq_by_rank_policy %>% 
+  filter(rank < 500,
+         rank > 10)
+
+lm(log10(`Term Frequency`) ~ log10(rank),
+   data = rank_subset)
+```
+
+Learning content for future use: decided not to use for the paper
+
+```{r}
+freq_by_rank_policy %>% 
+  ggplot(aes(x = rank,
+             y = `Term Frequency`,
+             color = TICKER)) + 
+  geom_abline(intercept = -0.59,
+              slope = -1.08, 
+              color = "gray50",
+              linetype = 2) +
+  geom_line(linewidth = 1.1, 
+            alpha = 0.8, 
+            show.legend = FALSE) + 
+  scale_x_log10() +
+  scale_y_log10()
+
+```
+
+TF-IDF based on 20 companies privacy policy
+
+```{r}
+TICKER_tf_idf <- policy_words_TEST %>% 
+  bind_tf_idf(word,TICKER,n)
+```
+
+Note from the class:
+Notice that idf and thus tf-idf are zero for these extremely common words. These are all words that appear in all 20 privacy policies, so the idf term (which will then be the natural log of 1) is zero. The inverse document frequency (and thus tf-idf) is very low (near zero) for words that occur in many of the documents in a collection; this is how this approach decreases the weight for common words. The inverse document frequency will be a higher number for words that occur in fewer of the documents in the collection.
+
+```{r}
+TICKER_tf_idf
+```
+
+Only showing Tf-IDF score
+
+```{r}
+TICKER_tf_idf %>%
+  select(-total) %>%
+  arrange(desc(tf_idf)) 
+```
+
+tf idf top 10 words: making this object so that it's downloadable as an image
+
+```{r}
+top10_tf_idf <- TICKER_tf_idf %>% 
+  select(-TICKER,-tf,-idf) %>% 
+  group_by(word) %>% 
+  summarize(n = sum(tf_idf)) %>% 
+  arrange(desc(n)) %>% 
+  head(10)
+top10_tf_idf
+```
+
+using ggplot, making a vizualization
+
+```{r}
+
+tf_idf_image2 <- ggplot(data = top10_tf_idf, aes(x = n,
+                                y = word)) +
+  geom_bar(stat = "identity",
+           aes(fill = word)) +
+  labs(x = "TF-IDF",
+       y = "Words") +
+  ggtitle("Distribution of TF-IDF in Privacy Policy") +
+  scale_y_reordered() +
+  guides(fill = F) +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5, 
+                                  face = "bold"))
+#ggsave("tf_idf_image2.png")
+```
+
+Decided not to use this one as well: 20 companies' tf-idf 
+
+```{r}
+library(forcats)
+
+tf_idf_barchart <- TICKER_tf_idf %>%
+  group_by(TICKER) %>%
+  slice_max(tf_idf,
+            n = 15) %>%
+  ungroup() %>%
+  ggplot(aes(x = tf_idf,
+             y = fct_reorder(word, tf_idf), fill = TICKER)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~TICKER, ncol = 3, scales = "free") +
+  labs(x = "tf-idf", y = NULL)
+tf_idf_barchart
+```
+
+ngram: bigram
+
+```{r}
+policy_bigrams <- policy %>% 
+  unnest_tokens(bigram,TEXT,token = "ngrams",n = 2) %>% 
+  filter(!is.na(bigram))
+policy_bigrams
+```
+
+Counting and filtering n-grams
+
+```{r}
+policy_bigrams %>% 
+  count(bigram,sort = TRUE)
+```
+
+Separating columns into mutiple based on a delimiter
+
+```{r}
+bigrams_separated <- policy_bigrams %>% 
+  separate(bigram,
+           c("word1","word2"),
+           sep = " ")
+
+bigrams_filtered <- bigrams_separated %>% 
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+# New bigram counts
+bigram_counts_policy <- 
+  bigrams_filtered %>% 
+  count(word1,word2,sort = TRUE)
+bigram_counts_policy
+```
+
+It's clear that personal information is the most commonly used bigram in the privacy policy of top 20 American companies.
+
+```{r}
+bigram_counts_policy
+```
+
+United bigrams
+
+```{r}
+bigrams_united <- bigrams_filtered %>% 
+  unite(bigram,
+        word1,
+        word2,
+        sep = " ")
+```
+
+top10 companies' bigram cleaning process
+
+```{r}
+top10_bigram_united <- bigrams_united %>%
+  select(-TICKER) %>% 
+  group_by(bigram) %>%
+  count(sort = TRUE) %>% 
+  summarize(n = sum(n)) %>% 
+  arrange(desc(n)) %>% 
+  head(10)
+top10_bigram_united
+```
+
+Be mindful of object names!
+making a bigram visualization
+
+```{r}
+bigram_image1 <- ggplot(data = top10_bigram_united, 
+       aes(x = n,  # Switch x and y axes
+           y = reorder(bigram,n))) +
+  geom_bar(stat = "identity",
+           aes(fill = bigram)) +
+  labs(x = "Term Frequency",  # Switch x and y axis labels
+       y = "Bigram") +
+  ggtitle("Distribution of Bigram Term Frequency in Privacy Policy") +
+  guides(fill = F) +
+  theme_bw(base_size = 9) +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"),
+        axis.text.y = element_text(angle = 0,  # Rotate y axis labels instead of x
+                                   hjust = 1),
+        axis.title.y = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0)))  # Adjust spacing of y axis title
+ggsave("bigram_image1.png")
+```
+
+Trigrams analysis: decided not to use this for the paper as well.
+The most frequently used trigram among terms used in privacy policy is "social media platform".
+
+```{r}
+policy %>%
+  unnest_tokens(trigram,
+                TEXT,
+                token = "ngrams",
+                n = 3) %>% 
+  filter(!is.na(trigram)) %>% 
+  separate(trigram,
+           c("word1","word2","word3"),
+           sep = " ") %>% 
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word) %>% 
+  count(word1,
+        word2,
+        word3,
+        sort = TRUE)
+```
+
+Analyzing bigrams: most common "data" in each company.
+
+```{r}
+bigrams_filtered %>% 
+  filter(word2 == "data") %>% 
+  count(TICKER,
+        word1,
+        sort = TRUE)
+```
+
+Getting bigram tf idf!
+
+```{r}
+bigram_tf_idf <- bigrams_united %>% 
+  count(TICKER,
+        bigram) %>% 
+  bind_tf_idf(bigram,
+              TICKER,
+              n) %>% 
+  arrange(desc(tf_idf))
+```
+
+
+```{r}
+bigram_tf_idf
+```
+
+cleaning; getting rid of unnecessary variables 
+
+```{r}
+top10_bigram_tf_idf <- bigram_tf_idf %>% 
+  select(-TICKER,-tf,-idf) %>% 
+  group_by(bigram) %>% 
+  summarize(n = sum(tf_idf)) %>% 
+  arrange(desc(n)) %>% 
+  head(10)
+top10_bigram_tf_idf
+```
+
+bigram tf-idf visualization
+
+```{r}
+bigram_tf_idf_image <- ggplot(data = top10_bigram_tf_idf, 
+       aes(x = n,  # Switch x and y axes
+           y = reorder(bigram,n))) +
+  geom_bar(stat = "identity",
+           aes(fill = bigram)) +
+  labs(x = "TF-IDF",  # Switch x and y axis labels
+       y = "Bigram") +
+  ggtitle("Bigram TF-IDF in Privacy Policy") +
+  guides(fill = F) +
+  theme_bw(base_size = 9) +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"),
+        axis.text.y = element_text(angle = 0,  # Rotate y axis labels instead of x
+                                   hjust = 1),
+        axis.title.y = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0)))  # Adjust spacing of y axis title
+ggsave("bigram_tf_idf_image.png")
+```
+
+### Deductive Approach ###
+
+Focusing on top 5 companies
+
+```{r}
+top5_policy <- policy %>% 
+  filter(TICKER %in% c("APPL","AMZN","MSFT","GOOG","NVDA"))
+```
+
+Top5 tokenization
+
+```{r}
+top5_policy_words <- top5_policy %>% 
+  unnest_tokens(word,TEXT) %>% 
+  count(TICKER,word,sort = TRUE)
+top5_policy_words
+```
+
+Top5: filtering words that are not stop_words
+
+```{r}
+top5_policy_words <- top5_policy_words %>% 
+  filter(!(word %in% stop_words$word))
+top5_policy_words
+```
+
+Making my own stop words for top5
+
+```{r}
+my_stop_words <- c("amazon","apple","gm","google","johnson","morgan","j.p","chase",
+                   "lilly","mastercard’s","meta","microsoft","nvidia","u.s","tesla",
+                   "careers.unitedhealthgroup.com","visa","exxonmobil","exxon","mobil",
+                   "walmart","pi","google’s","we’ll","you’re")
+top5_policy_words <- top5_policy_words %>% 
+  filter(!(word %in% my_stop_words))
+top5_policy_words
+```
+
+Top10 words across the TOP5 companies' documents
+
+```{r}
+top5_companies_top10_policy_word <- top5_policy_words %>% 
+  select(-TICKER) %>% 
+  group_by(word) %>% 
+  summarize(n = sum(n)) %>% 
+  arrange(desc(n)) %>% 
+  head(10)
+top5_companies_top10_policy_word
+```
+
+Top5: reordering word variable based on TF
+
+```{r}
+top5_companies_top10_policy_word$word <- forcats::fct_reorder(top5_companies_top10_policy_word$word,
+                                                   top5_companies_top10_policy_word$n,
+                                                   .desc = F)
+```
+
+Making top 5 sub-group comparison-based visualization
+
+```{r}
+top5_tf_image1 <- ggplot(data = top5_companies_top10_policy_word, 
+       aes(x = n,  # Switch x and y axes
+           y = word)) +
+  geom_bar(stat = "identity",
+           aes(fill = word)) +
+  labs(x = "Term Frequency",  # Switch x and y axis labels
+       y = "Words") +
+  ggtitle("Distribution of Top 5 Companies' Term Frequency in Privacy Policy") +
+  scale_y_reordered() +  # Use scale_y_reordered instead of scale_x_reordered
+  guides(fill = F) +
+  theme_bw(base_size = 11) +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"),
+        axis.text.y = element_text(angle = 0,  # Rotate y axis labels instead of x
+                                   hjust = 1),
+        axis.title.y = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0)))  # Adjust spacing of y axis title
+ggsave("top5_tf_image1.png")
+```
+Sub-group comparison: overview on top5 privacy policy
+
+```{r}
+TOP5_TICKER_tf_idf <- top5_policy_words %>% 
+  bind_tf_idf(word,TICKER,n)
+TOP5_TICKER_tf_idf
+```
+
+Sub-group comparison: getting top5 companies tf only 
+
+```{r}
+top5_tf <- TOP5_TICKER_tf_idf %>%
+  select(-idf,-tf_idf)
+top5_tf %>% 
+  arrange(desc(tf))
+```
+
+Sub-group comparison: making visualizations based on top 5 words TF visualization
+
+```{r}
+top5_tf_image1 <- top5_tf %>%
+  group_by(TICKER) %>%
+  slice_max(tf, n = 5) %>%
+  ungroup() %>%
+  ggplot(aes(x = tf, 
+             fct_reorder(word, tf), fill = TICKER)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~TICKER, ncol = 2, scales = "free") +
+  labs(x = "Term Frequency" , 
+       y = NULL) +
+  theme_bw() +
+  ggtitle("Top 5 American Companies' TF in Privacy Policy") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"))
+ggsave("top5_tf_image1.png")
+```
+
+Sub-group comparison: getting top5 companies tf_idf only 
+
+```{r}
+top5_tf_idf <- TOP5_TICKER_tf_idf %>%
+  select(-tf,-idf) %>% 
+  arrange(desc(tf_idf))
+top5_tf_idf
+```
+
+again making a visualization for bigram TF-IDF
+
+```{r}
+top5_tf_idf_image1 <- top5_tf_idf %>%
+  group_by(TICKER) %>%
+  slice_max(tf_idf, n = 5) %>%
+  ungroup() %>%
+  ggplot(aes(x = tf_idf, 
+             fct_reorder(word, tf_idf), 
+             fill = TICKER)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~TICKER, ncol = 2, scales = "free") +
+  labs(x = "TF-IDF" , 
+       y = NULL) +
+  theme_bw() +
+  ggtitle("Top 5 American Companies' TF-IDF in Privacy Policy") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"))
+ggsave("top5_tf_idf_image1.png")
+```
+
+Notice that idf and thus tf-idf are zero for these extremely common words. These are all words that appear in all 20 privacy policies, so the idf term (which will then be the natural log of 1) is zero. The inverse document frequency (and thus tf-idf) is very low (near zero) for words that occur in many of the documents in a collection; this is how this approach decreases the weight for common words. The inverse document frequency will be a higher number for words that occur in fewer of the documents in the collection.
+
+```{r}
+TOP5_TICKER_tf_idf
+```
+Reordering TD-IDF score here
+
+```{r}
+TOP5_TICKER_tf_idf <- TOP5_TICKER_tf_idf %>%
+  arrange(desc(tf_idf))
+```
+
+TOP5 Companies' tf idf top 10 words
+
+```{r}
+TOP5_companies_top10_tf_idf <- TOP5_TICKER_tf_idf %>% 
+  select(-TICKER,-tf,-idf) %>% 
+  group_by(word) %>% 
+  summarize(n = sum(tf_idf)) %>% 
+  arrange(desc(n)) %>% 
+  head(10)
+TOP5_companies_top10_tf_idf
+```
+
+Reordering the TF-IDF score differently 
+
+```{r}
+TOP5_companies_top10_tf_idf$word <- forcats::fct_reorder(TOP5_companies_top10_tf_idf$word,
+                                                   TOP5_companies_top10_tf_idf$n,
+                                                   .desc = F)
+```
+
+Sub-group comparison: getting top5 companies tf_idf visualization
+
+```{r}
+
+top5_tf_idf_image1 <- ggplot(data = TOP5_companies_top10_tf_idf,
+                             aes(x = n,
+                                 y = word)) +
+  geom_bar(stat = "identity",
+           aes(fill = word)) +
+  labs(x = "Top5 Companies' TF-IDF",
+       y = "Words") +
+  ggtitle("Distribution of Top 5 Companies' TF-IDF in Privacy Policy") +
+  scale_y_reordered() +
+  guides(fill = F) +
+  theme_bw(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5, 
+                                  face = "bold"))
+top5_tf_idf_image1
+```
+
+Sub-group comparison: top 5 companies' ngram: bigram
+
+```{r}
+top5_policy_bigrams <- top5_policy %>% 
+  unnest_tokens(bigram,TEXT,token = "ngrams",n = 2) %>% 
+  filter(!is.na(bigram))
+top5_policy_bigrams
+```
+
+Sub-group comparison: Counting and filtering n-grams
+
+```{r}
+top5_policy_bigrams %>% 
+  count(bigram,sort = TRUE)
+```
+
+Sub-group comparison: Separating columns into mutiple based on a delimiter
+
+```{r}
+top5_bigrams_separated <- top5_policy_bigrams %>% 
+  separate(bigram,
+           c("word1","word2"),
+           sep = " ")
+
+top5_bigrams_filtered <- top5_bigrams_separated %>% 
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+# New bigram counts
+top_5_bigram_counts <- top5_bigrams_filtered %>% 
+  count(word1,
+        word2,
+        sort = TRUE)
+```
+
+Sub-group comparison: top5 United bigrams
+
+```{r}
+top5_bigrams_united <- top5_bigrams_filtered %>% 
+  unite(bigram,
+        word1,
+        word2,
+        sep = " ")
+top5_bigrams_united
+```
+
+Sub-group comparison: TF
+
+```{r}
+top_5_top5bigrams <- top5_bigrams_united %>%
+  group_by(TICKER) %>% 
+  count(bigram,
+        sort = TRUE) %>% 
+  arrange(desc(n))
+top_5_top5bigrams
+```
+
+Sub-group comparison: TF visualization
+
+```{r}
+top5_top5bigram_tf_image <- top_5_top5bigrams %>%
+  group_by(TICKER) %>%
+  slice_max(n, n = 5) %>%
+  ungroup() %>%
+  ggplot(aes(x = n, 
+             fct_reorder(bigram, n), 
+             fill = TICKER)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ TICKER, ncol = 2, scales = "free") +
+  labs(x = "TF" , 
+       y = NULL) +
+  theme_bw() +
+  ggtitle("Top 5 American Companies' Bigram TF in Privacy Policy") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"))
+top5_top5bigram_tf_image
+ggsave("top5_top5bigram_tf_image.png")
+```
+
+Once again, applying my own dictionary to clean further the dataset
+
+```{r}
+my_stop_words <- c("amazon","apple","gm","google","johnson","morgan","j.p","chase",
+                   "lilly","mastercard’s","meta","microsoft","nvidia","u.s","tesla",
+                   "careers.unitedhealthgroup.com","visa","exxonmobil","exxon","mobil",
+                   "walmart","pi")
+top5_policy_words_clean <- top5_policy_words %>% 
+  filter(!(word %in% my_stop_words))
+top5_policy_words_clean
+```
+
+Sub-group comparison: top 5 companies' TF-IDF
+
+```{r}
+top5_bigram_tf_idf <- top5_bigrams_united %>% 
+count(TICKER,bigram) %>% 
+  bind_tf_idf(bigram,
+              TICKER,
+              n) %>% 
+  arrange(desc(tf_idf))
+top5_bigram_tf_idf
+```
+
+cleaning TF-IDF-based dataset
+
+```{r}
+top5_bigram_tf_idf_NEW <- top5_bigram_tf_idf %>% 
+  select(-tf,-idf,-n) %>%
+  group_by(TICKER) %>%
+  arrange(desc(tf_idf))
+```
+
+top5: bigram tf-idf visualization
+
+```{r}
+top5_bigram_tf_idf_NEW <- 
+  top5_bigram_tf_idf_NEW %>%
+  group_by(TICKER) %>%
+  slice_max(tf_idf, n = 5) %>%
+  ungroup()
+
+top5_bigram_tf_idf_NEW <- top5_bigram_tf_idf_NEW[-c(26:36),]
+
+  top5_bigram_tf_idf_image <- top5_bigram_tf_idf_NEW %>%
+  ggplot(aes(x = tf_idf, 
+             fct_reorder(bigram, tf_idf), 
+             fill = TICKER)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~TICKER, ncol = 2, scales = "free") +
+  labs(x = "TF-IDF" , 
+       y = NULL) +
+  theme_bw() +
+  ggtitle("Top 5 American Companies' Bigram TF-IDF in Privacy Policy") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"))
+top5_bigram_tf_idf_image
+  #ggsave("top5_bigram_tf_idf_image.png")
+```
+
+Sentiment analysis using the term, "not": decided not to use this 
+What is the term associated with what companies or consumers not do?
+
+```{r}
+AFINN <- get_sentiments("afinn")
+AFINN
+not_words_policy <- bigrams_separated %>% 
+  filter(word1 == "not") %>% 
+  inner_join(AFINN,
+             by = c(word2 = "word")) %>% 
+  count(word2,
+        value,
+        sort = TRUE)
+
+not_words_policy
+```
+
+Decided not to use this for the paper
+
+```{r}
+not_words_policy %>%
+  mutate(contribution = n * value) %>%
+  arrange(desc(abs(contribution))) %>%
+  head(20) %>%
+  mutate(word2 = reorder(word2, contribution)) %>%
+  ggplot(aes(n * value, word2, fill = n * value > 0)) +
+  geom_col(show.legend = FALSE) +
+  labs(x = "Sentiment value * number of occurrences",
+       y = "Words preceded by \"not\"")
+```
+
+How to visualize the below chunk
+4.1.4 Visualizing a network of bigrams with ggraph
+
+```{r}
+negation_words <- c("not", "no", "never", "without")
+
+negated_words <- bigrams_separated %>%
+  filter(word1 %in% negation_words) %>%
+  inner_join(AFINN, by = c(word2 = "word")) %>%
+  count(word1, word2, value, sort = TRUE)
+```
+
+---------------------------------------------------------------------------
+
+Setting an environment required for me to use a dictionary
+
+```{r}
+#install.packages("devtools")
+devtools::install_github("kbenoit/quanteda.dictionaries")
+library(quanteda.dictionaries)
+```
+
+Part 4 Sentiment Analysis
+Privacy policy version of document-feature matrix
+Loading the dictionary and library I want to use for deductive approach.
+
+```{r}
+data(data_dictionary_LaverGarry)
+library(remotes)
+remotes::install_github("kbenoit/quanteda.dictionaries")
+```
+
+
+```{r}
+policy = read_csv("privacy_policy_1.csv") %>% 
+  corpus(text_field = 'TEXT')  %>% 
+  dfm()
+```
+
+Loading a dictionary
+
+```{r}
+GI_dict = dictionary(DictionaryGI)
+```
+making the dictionary dataframe
+
+
+```{r}
+result <-  policy %>% 
+  dfm_lookup(GI_dict) %>% 
+  convert(to = "data.frame") %>% 
+  as_tibble()
+result
+```
+Cleaning converting text to company name
+
+```{r}
+result <- result %>% 
+  mutate(doc_id = case_when(doc_id == "text1" ~ "AAPL",
+                            doc_id == "text2" ~ "AMZN",
+                            doc_id == "text3" ~ "MSFT",
+                            doc_id == "text4" ~ "GOOG",
+                            doc_id == "text5" ~ "BRK",
+                            doc_id == "text6" ~ "UNH",
+                            doc_id == "text7" ~ "JNJ",
+                            doc_id == "text8" ~ "XON",
+                            doc_id == "text9" ~ "VISA",
+                            doc_id == "text10" ~ "JPM",
+                            doc_id == "text11" ~ "TSLA",
+                            doc_id == "text12" ~ "WMT",
+                            doc_id == "text13" ~ "NVDA",
+                            doc_id == "text14" ~ "PG",
+                            doc_id == "text15" ~ "LLY",
+                            doc_id == "text16" ~ "GM",
+                            doc_id == "text17" ~ "MA",
+                            doc_id == "text18" ~ "HD",
+                            doc_id == "text19" ~ "PFE",
+                            doc_id == "text20" ~ "META"))
+```
+
+Adding a new column containing length of words
+
+```{r}
+result = result %>% 
+  mutate(length = ntoken(policy))
+```
+
+Expressing positive and negative words between -1 and +1
+
+```{r}
+result = result %>% 
+  mutate(sentiment_degree = (positive - negative) / (positive + negative))
+```
+
+Data cleaning to make a visualization on positive and negative words
+
+```{r}
+result_bar_pos_neg <- result %>% 
+  summarize(neg_sum = sum(negative),
+            pos_sum = sum(positive))
+result_bar_pos_neg <- as.data.frame(result_bar_pos_neg)
+
+result_bar_pos_neg <- pivot_longer(result_bar_pos_neg, 
+                        cols = c(pos_sum, neg_sum), 
+                        names_to = "variable", 
+                        values_to = "value")
+```
+
+Data visualization on positive and negative words in privacy policy
+
+```{r}
+pos_neg_names = c("negative words",
+                  "positive words")
+
+pos_neg_words_image <- ggplot(result_bar_pos_neg,
+       aes(x = variable, 
+           y = value, 
+           fill = variable)) +
+  geom_col(show.legend = FALSE) + 
+  theme_bw() +
+  ggtitle("Positive and Negative Words used in Privacy Policy") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold")) +
+  scale_x_discrete(labels = pos_neg_names) +
+  labs(x = "",
+       y = "Frequency")
+ggsave("pos_neg_words_image.png")
+```
+
+Reodering the sentiment degree again to clean more
+
+```{r}
+senti_degree$sentiment_degree <- forcats::fct_reorder(senti_degree$doc_id,
+                                                   senti_degree$sentiment_degree,
+                                                   .desc = F)
+```
+
+Reodering the sentiment degree again to clean more
+
+```{r}
+senti_degree <- result %>% 
+  group_by(doc_id) %>%
+  arrange(desc(sentiment_degree))
+senti_degree
+```
+
+Reodering the sentiment degree again to clean differently
+
+
+```{r}
+senti_degree$doc_id <- forcats::fct_reorder(senti_degree$doc_id,
+                                                   senti_degree$sentiment_degree,
+                                                   .desc = F)
+```
+
+Making a visualization based on sentiment degree of 20 companies
+
+```{r}
+senti_degree_image <- senti_degree %>% 
+  ggplot() +
+  geom_col(aes(x = sentiment_degree,
+               y = doc_id,
+               fill = doc_id),
+           show.legend = FALSE) +
+  theme_bw() +
+  ggtitle("Sentiment Analysis on Privacy Policy") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold")) +
+    scale_x_continuous(limits = c(-1, 1)) +
+  labs(x = "Sentiment Degree",
+       y = "TICKER")
+
+ggsave("senti_degree_image.png")
+```
+
